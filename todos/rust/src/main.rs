@@ -137,6 +137,14 @@ fn index(ctx: &Ctx) -> Response {
     ok_html_handler(&html)
 }
 
+fn redirect_home(ctx: &Ctx) -> Response {
+    // Set up index page template rendering context
+    let mut tera_ctx = ctx.todos.todos_tera_ctx();
+    tera_ctx.insert("redirect", &true);
+    let html = TERA.render("index.html", &tera_ctx).unwrap();
+    ok_html_handler(&html)
+}
+
 fn stylesheet() -> Response {
     let body = include_str!("resource/todo.css");
     ok_string_handler(body, "text/css")
@@ -166,14 +174,6 @@ fn image(path_str: &str) -> Response {
     }
 }
 
-fn redirect_home() -> Response {
-    hyper::Response::builder()
-        .status(hyper::StatusCode::SEE_OTHER)
-        .header(hyper::header::LOCATION, "/")
-        .body(hyper::Body::from(""))
-        .unwrap()
-}
-
 /// Get the value after the '=' in a request payload
 async fn extract_payload<'a>(request: Request) -> String {
     let body = request.into_body();
@@ -188,7 +188,7 @@ async fn add_todo_handler(request: Request, ctx: &Ctx) -> Response {
 
     ctx.todos.push(Todo::new(&payload));
 
-    redirect_home()
+    redirect_home(ctx)
 }
 
 async fn remove_todo_handler(request: Request, ctx: &Ctx) -> Response {
@@ -196,7 +196,7 @@ async fn remove_todo_handler(request: Request, ctx: &Ctx) -> Response {
     let id = Uuid::parse_str(&payload).unwrap();
     ctx.todos.remove(id);
 
-    redirect_home()
+    redirect_home(ctx)
 }
 
 async fn toggle_todo_handler(request: Request, ctx: &Ctx) -> Response {
@@ -204,7 +204,7 @@ async fn toggle_todo_handler(request: Request, ctx: &Ctx) -> Response {
     let id = Uuid::parse_str(&payload).unwrap();
     ctx.todos.toggle(id);
 
-    redirect_home()
+    redirect_home(ctx)
 }
 
 async fn handle(request: Request, ctx: &Ctx) -> Response {
