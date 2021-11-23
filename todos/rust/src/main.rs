@@ -126,10 +126,10 @@ async fn four_oh_four() -> Response {
     html_str_handler("<h1>NOT FOUND!</h1>", http::StatusCode::NOT_FOUND).await
 }
 
-async fn index(request: Request) -> Response {
+async fn index(mut request: Request) -> Response {
     // Set up index page template rendering context
     let mut tera_ctx = tera::Context::new();
-    let todos_ctx: Arc<RwLock<Todos>> = Arc::clone(request.extensions().get().unwrap());
+    let todos_ctx: Arc<RwLock<Todos>> = request.extensions_mut().remove().unwrap();
     {
         let lock = todos_ctx.read().unwrap();
         let todos = lock.todos();
@@ -187,8 +187,8 @@ async fn extract_payload<'a>(request: Request) -> String {
     words[1].to_owned()
 }
 
-async fn add_todo_handler(request: Request) -> Response {
-    let todos_ctx: Arc<RwLock<Todos>> = Arc::clone(request.extensions().get().unwrap());
+async fn add_todo_handler(mut request: Request) -> Response {
+    let todos_ctx: Arc<RwLock<Todos>> = request.extensions_mut().remove().unwrap();
     let payload = extract_payload(request).await;
     {
         let mut lock = todos_ctx.write().unwrap();
@@ -197,8 +197,8 @@ async fn add_todo_handler(request: Request) -> Response {
     redirect_home().await
 }
 
-async fn remove_todo_handler(request: Request) -> Response {
-    let todos_ctx: Arc<RwLock<Todos>> = Arc::clone(request.extensions().get().unwrap());
+async fn remove_todo_handler(mut request: Request) -> Response {
+    let todos_ctx: Arc<RwLock<Todos>> = request.extensions_mut().remove().unwrap();
     let payload = extract_payload(request).await;
     {
         let mut lock = todos_ctx.write().unwrap();
@@ -207,8 +207,8 @@ async fn remove_todo_handler(request: Request) -> Response {
     redirect_home().await
 }
 
-async fn toggle_todo_handler(request: Request) -> Response {
-    let todos_ctx: Arc<RwLock<Todos>> = Arc::clone(request.extensions().get().unwrap());
+async fn toggle_todo_handler(mut request: Request) -> Response {
+    let todos_ctx: Arc<RwLock<Todos>> = request.extensions_mut().remove().unwrap();
     let payload = extract_payload(request).await;
     {
         let mut lock = todos_ctx.write().unwrap();
@@ -371,7 +371,7 @@ mod test {
             .body(hyper::Body::empty())
             .unwrap();
         let context = Arc::new(RwLock::new(Todos::new()));
-        request.extensions_mut().insert(Arc::clone(&context));
+        request.extensions_mut().insert(context);
         let response = handle(request).await;
 
         assert_eq!(response.status(), http::status::StatusCode::NOT_FOUND);
