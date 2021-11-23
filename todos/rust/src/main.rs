@@ -129,10 +129,14 @@ async fn four_oh_four() -> Response {
 async fn index(mut request: Request) -> Response {
     // Set up index page template rendering context
     let mut tera_ctx = tera::Context::new();
-    let todos_ctx: Arc<RwLock<Todos>> = request.extensions_mut().remove().unwrap();
     {
-        let lock = todos_ctx.read().unwrap();
-        let todos = lock.todos();
+        let todos = request
+            .extensions()
+            .get::<Arc<RwLock<Todos>>>()
+            .unwrap()
+            .read()
+            .unwrap()
+            .todos();
         let len = todos.len();
         tera_ctx.insert("todos", todos);
         tera_ctx.insert("todosLen", &len);
@@ -190,30 +194,33 @@ async fn extract_payload<'a>(request: Request) -> String {
 async fn add_todo_handler(mut request: Request) -> Response {
     let todos_ctx: Arc<RwLock<Todos>> = request.extensions_mut().remove().unwrap();
     let payload = extract_payload(request).await;
-    {
-        let mut lock = todos_ctx.write().unwrap();
-        (*lock).push(Todo::new(&payload));
-    }
+
+    todos_ctx.write().unwrap().push(Todo::new(&payload));
+
     redirect_home().await
 }
 
 async fn remove_todo_handler(mut request: Request) -> Response {
     let todos_ctx: Arc<RwLock<Todos>> = request.extensions_mut().remove().unwrap();
     let payload = extract_payload(request).await;
-    {
-        let mut lock = todos_ctx.write().unwrap();
-        (*lock).remove(Uuid::parse_str(&payload).unwrap());
-    }
+
+    todos_ctx
+        .write()
+        .unwrap()
+        .remove(Uuid::parse_str(&payload).unwrap());
+
     redirect_home().await
 }
 
 async fn toggle_todo_handler(mut request: Request) -> Response {
     let todos_ctx: Arc<RwLock<Todos>> = request.extensions_mut().remove().unwrap();
     let payload = extract_payload(request).await;
-    {
-        let mut lock = todos_ctx.write().unwrap();
-        (*lock).toggle(Uuid::parse_str(&payload).unwrap());
-    }
+
+    todos_ctx
+        .write()
+        .unwrap()
+        .toggle(Uuid::parse_str(&payload).unwrap());
+
     redirect_home().await
 }
 
