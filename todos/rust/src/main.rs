@@ -96,7 +96,7 @@ impl Todos {
 
 // Response builders
 
-async fn bytes_handler(body: &[u8], content_type: &str, status_code: http::StatusCode) -> Response {
+fn bytes_handler(body: &[u8], content_type: &str, status_code: http::StatusCode) -> Response {
     let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(body).unwrap();
     let compressed = encoder.finish().unwrap();
@@ -108,46 +108,46 @@ async fn bytes_handler(body: &[u8], content_type: &str, status_code: http::Statu
         .unwrap()
 }
 
-async fn string_handler(body: &str, content_type: &str, status_code: http::StatusCode) -> Response {
-    bytes_handler(body.as_bytes(), content_type, status_code).await
+fn string_handler(body: &str, content_type: &str, status_code: http::StatusCode) -> Response {
+    bytes_handler(body.as_bytes(), content_type, status_code)
 }
 
-async fn ok_string_handler(body: &str, content_type: &str) -> Response {
-    string_handler(body, content_type, hyper::StatusCode::OK).await
+fn ok_string_handler(body: &str, content_type: &str) -> Response {
+    string_handler(body, content_type, hyper::StatusCode::OK)
 }
 
-async fn html_str_handler(html: &str, status_code: http::StatusCode) -> Response {
-    string_handler(html, "text/html", status_code).await
+fn html_str_handler(html: &str, status_code: http::StatusCode) -> Response {
+    string_handler(html, "text/html", status_code)
 }
 
-async fn ok_html_handler(html: &str) -> Response {
-    html_str_handler(html, http::StatusCode::OK).await
+fn ok_html_handler(html: &str) -> Response {
+    html_str_handler(html, http::StatusCode::OK)
 }
 
 // Endpoint handlers
 
-async fn four_oh_four() -> Response {
-    html_str_handler("<h1>NOT FOUND!</h1>", http::StatusCode::NOT_FOUND).await
+fn four_oh_four() -> Response {
+    html_str_handler("<h1>NOT FOUND!</h1>", http::StatusCode::NOT_FOUND)
 }
 
-async fn index(_request: Request, ctx: &Ctx) -> Response {
+fn index(_request: Request, ctx: &Ctx) -> Response {
     // Set up index page template rendering context
     let tera_ctx = ctx.todos.todos_tera_ctx();
     let html = TERA.render("index.html", &tera_ctx).unwrap().to_string();
-    ok_html_handler(&html).await
+    ok_html_handler(&html)
 }
 
-async fn stylesheet() -> Response {
+fn stylesheet() -> Response {
     let body = include_str!("resource/todo.css");
-    ok_string_handler(body, "text/css").await
+    ok_string_handler(body, "text/css")
 }
 
-async fn image(path_str: &str) -> Response {
+fn image(path_str: &str) -> Response {
     let path_buf = PathBuf::from(path_str);
     let file_name = path_buf.file_name().unwrap().to_str().unwrap();
     let ext = match path_buf.extension() {
         Some(e) => e.to_str().unwrap(),
-        None => return four_oh_four().await,
+        None => return four_oh_four(),
     };
 
     match ext {
@@ -160,13 +160,13 @@ async fn image(path_str: &str) -> Response {
                 "x.svg" => include_str!("resource/x.svg"),
                 _ => "",
             };
-            ok_string_handler(body, "image/svg+xml").await
+            ok_string_handler(body, "image/svg+xml")
         }
-        _ => four_oh_four().await,
+        _ => four_oh_four(),
     }
 }
 
-async fn redirect_home() -> Response {
+fn redirect_home() -> Response {
     hyper::Response::builder()
         .status(hyper::StatusCode::SEE_OTHER)
         .header(hyper::header::LOCATION, "/")
@@ -188,7 +188,7 @@ async fn add_todo_handler(request: Request, ctx: &Ctx) -> Response {
 
     ctx.todos.push(Todo::new(&payload));
 
-    redirect_home().await
+    redirect_home()
 }
 
 async fn remove_todo_handler(request: Request, ctx: &Ctx) -> Response {
@@ -196,7 +196,7 @@ async fn remove_todo_handler(request: Request, ctx: &Ctx) -> Response {
     let id = Uuid::parse_str(&payload).unwrap();
     ctx.todos.remove(id);
 
-    redirect_home().await
+    redirect_home()
 }
 
 async fn toggle_todo_handler(request: Request, ctx: &Ctx) -> Response {
@@ -204,7 +204,7 @@ async fn toggle_todo_handler(request: Request, ctx: &Ctx) -> Response {
     let id = Uuid::parse_str(&payload).unwrap();
     ctx.todos.toggle(id);
 
-    redirect_home().await
+    redirect_home()
 }
 
 async fn handle(request: Request, ctx: &Ctx) -> Response {
@@ -212,20 +212,18 @@ async fn handle(request: Request, ctx: &Ctx) -> Response {
     match (request.method(), request.uri().path()) {
         // GET handlers
         // Index page handler
-        (&hyper::Method::GET, "/") | (&hyper::Method::GET, "/index.html") => {
-            index(request, ctx).await
-        }
+        (&hyper::Method::GET, "/") | (&hyper::Method::GET, "/index.html") => index(request, ctx),
         // Style handler
-        (&hyper::Method::GET, "/static/todo.css") => stylesheet().await,
+        (&hyper::Method::GET, "/static/todo.css") => stylesheet(),
         // Image handler
-        (&hyper::Method::GET, path_str) => image(path_str).await,
+        (&hyper::Method::GET, path_str) => image(path_str),
         // POST handlers
         (&hyper::Method::POST, "/done") => toggle_todo_handler(request, ctx).await,
         (&hyper::Method::POST, "/not-done") => toggle_todo_handler(request, ctx).await,
         (&hyper::Method::POST, "/delete") => remove_todo_handler(request, ctx).await,
         (&hyper::Method::POST, "/") => add_todo_handler(request, ctx).await,
         // Anything else handler
-        _ => four_oh_four().await,
+        _ => four_oh_four(),
     }
 }
 // Create a task local that will store the panic message and backtrace if a panic occurs.
