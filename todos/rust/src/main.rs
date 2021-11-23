@@ -130,7 +130,7 @@ fn four_oh_four() -> Response {
     html_str_handler("<h1>NOT FOUND!</h1>", http::StatusCode::NOT_FOUND)
 }
 
-fn index(_request: Request, ctx: &Ctx) -> Response {
+fn index(ctx: &Ctx) -> Response {
     // Set up index page template rendering context
     let tera_ctx = ctx.todos.todos_tera_ctx();
     let html = TERA.render("index.html", &tera_ctx).unwrap();
@@ -212,7 +212,7 @@ async fn handle(request: Request, ctx: &Ctx) -> Response {
     match (request.method(), request.uri().path()) {
         // GET handlers
         // Index page handler
-        (&hyper::Method::GET, "/") | (&hyper::Method::GET, "/index.html") => index(request, ctx),
+        (&hyper::Method::GET, "/") | (&hyper::Method::GET, "/index.html") => index(ctx),
         // Style handler
         (&hyper::Method::GET, "/static/todo.css") => stylesheet(),
         // Image handler
