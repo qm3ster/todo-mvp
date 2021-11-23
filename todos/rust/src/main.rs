@@ -133,7 +133,7 @@ fn four_oh_four() -> Response {
 fn index(_request: Request, ctx: &Ctx) -> Response {
     // Set up index page template rendering context
     let tera_ctx = ctx.todos.todos_tera_ctx();
-    let html = TERA.render("index.html", &tera_ctx).unwrap().to_string();
+    let html = TERA.render("index.html", &tera_ctx).unwrap();
     ok_html_handler(&html)
 }
 
