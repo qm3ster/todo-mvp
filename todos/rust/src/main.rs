@@ -20,7 +20,7 @@ type Response = http::Response<hyper::Body>;
 
 #[derive(Debug, Default)]
 struct Ctx {
-    todos: RwLock<Todos>,
+    todos: Todos,
 }
 
 /// Todo type
@@ -54,34 +54,39 @@ lazy_static! {
 }
 
 #[derive(Debug, Default)]
-struct Todos(Vec<Todo>);
+struct Todos(RwLock<Vec<Todo>>);
 
 impl Todos {
-    pub fn push(&mut self, todo: Todo) {
-        self.0.push(todo);
+    pub fn push(&self, todo: Todo) {
+        self.0.write().unwrap().push(todo);
     }
 
-    pub fn remove(&mut self, id: Uuid) -> Option<Todo> {
-        let mut idx = self.0.len();
-        for (i, todo) in self.0.iter().enumerate() {
+    pub fn remove(&self, id: Uuid) -> Option<Todo> {
+        let mut todos = self.0.write().unwrap();
+        let mut idx = todos.len();
+        for (i, todo) in todos.iter().enumerate() {
             if todo.id == id {
                 idx = i;
             }
         }
-        if idx < self.0.len() {
-            let ret = self.0.remove(idx);
+        if idx < todos.len() {
+            let ret = todos.remove(idx);
             Some(ret)
         } else {
             None
         }
     }
 
-    pub fn todos(&self) -> &[Todo] {
-        &self.0
+    pub fn todos_tera_ctx(&self) -> tera::Context {
+        let todos = self.0.read().unwrap();
+        let mut tera_ctx = tera::Context::new();
+        tera_ctx.insert("todos", &*todos);
+        tera_ctx.insert("todosLen", &todos.len());
+        tera_ctx
     }
 
-    pub fn toggle(&mut self, id: Uuid) {
-        for todo in &mut self.0 {
+    pub fn toggle(&self, id: Uuid) {
+        for todo in self.0.write().unwrap().iter_mut() {
             if todo.id == id {
                 todo.done = !todo.done;
             }
@@ -127,13 +132,7 @@ async fn four_oh_four() -> Response {
 
 async fn index(_request: Request, ctx: &Ctx) -> Response {
     // Set up index page template rendering context
-    let mut tera_ctx = tera::Context::new();
-    {
-        let todos = ctx.todos.read().unwrap();
-        let todos = todos.todos();
-        tera_ctx.insert("todos", todos);
-        tera_ctx.insert("todosLen", &todos.len());
-    }
+    let tera_ctx = ctx.todos.todos_tera_ctx();
     let html = TERA.render("index.html", &tera_ctx).unwrap().to_string();
     ok_html_handler(&html).await
 }
@@ -187,7 +186,7 @@ async fn extract_payload<'a>(request: Request) -> String {
 async fn add_todo_handler(request: Request, ctx: &Ctx) -> Response {
     let payload = extract_payload(request).await;
 
-    ctx.todos.write().unwrap().push(Todo::new(&payload));
+    ctx.todos.push(Todo::new(&payload));
 
     redirect_home().await
 }
@@ -195,7 +194,7 @@ async fn add_todo_handler(request: Request, ctx: &Ctx) -> Response {
 async fn remove_todo_handler(request: Request, ctx: &Ctx) -> Response {
     let payload = extract_payload(request).await;
     let id = Uuid::parse_str(&payload).unwrap();
-    ctx.todos.write().unwrap().remove(id);
+    ctx.todos.remove(id);
 
     redirect_home().await
 }
@@ -203,7 +202,7 @@ async fn remove_todo_handler(request: Request, ctx: &Ctx) -> Response {
 async fn toggle_todo_handler(request: Request, ctx: &Ctx) -> Response {
     let payload = extract_payload(request).await;
     let id = Uuid::parse_str(&payload).unwrap();
-    ctx.todos.write().unwrap().toggle(id);
+    ctx.todos.toggle(id);
 
     redirect_home().await
 }
