@@ -1,3 +1,5 @@
+#![feature(type_alias_impl_trait)]
+
 use anyhow::Result;
 use backtrace::Backtrace;
 use clap::Parser;
@@ -7,18 +9,19 @@ use hyper::http;
 use lazy_static::lazy_static;
 use serde::Serialize;
 use std::{
-    cell::RefCell,
-    convert::Infallible,
-    io::Write,
-    panic::AssertUnwindSafe,
-    path::PathBuf,
-    sync::{Arc, RwLock},
+    cell::RefCell, convert::Infallible, io::Write, panic::AssertUnwindSafe, path::PathBuf,
+    sync::RwLock,
 };
 use tera::Tera;
 use uuid::Uuid;
 
 type Request = http::Request<hyper::Body>;
 type Response = http::Response<hyper::Body>;
+
+#[derive(Debug, Default)]
+struct Ctx {
+    todos: RwLock<Todos>,
+}
 
 /// Todo type
 #[derive(Debug, Serialize)]
@@ -54,10 +57,6 @@ lazy_static! {
 struct Todos(Vec<Todo>);
 
 impl Todos {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn push(&mut self, todo: Todo) {
         self.0.push(todo);
     }
@@ -126,20 +125,14 @@ async fn four_oh_four() -> Response {
     html_str_handler("<h1>NOT FOUND!</h1>", http::StatusCode::NOT_FOUND).await
 }
 
-async fn index(mut request: Request) -> Response {
+async fn index(_request: Request, ctx: &Ctx) -> Response {
     // Set up index page template rendering context
     let mut tera_ctx = tera::Context::new();
     {
-        let todos = request
-            .extensions()
-            .get::<Arc<RwLock<Todos>>>()
-            .unwrap()
-            .read()
-            .unwrap()
-            .todos();
-        let len = todos.len();
+        let todos = ctx.todos.read().unwrap();
+        let todos = todos.todos();
         tera_ctx.insert("todos", todos);
-        tera_ctx.insert("todosLen", &len);
+        tera_ctx.insert("todosLen", &todos.len());
     }
     let html = TERA.render("index.html", &tera_ctx).unwrap().to_string();
     ok_html_handler(&html).await
@@ -191,112 +184,56 @@ async fn extract_payload<'a>(request: Request) -> String {
     words[1].to_owned()
 }
 
-async fn add_todo_handler(mut request: Request) -> Response {
-    let todos_ctx: Arc<RwLock<Todos>> = request.extensions_mut().remove().unwrap();
+async fn add_todo_handler(request: Request, ctx: &Ctx) -> Response {
     let payload = extract_payload(request).await;
 
-    todos_ctx.write().unwrap().push(Todo::new(&payload));
+    ctx.todos.write().unwrap().push(Todo::new(&payload));
 
     redirect_home().await
 }
 
-async fn remove_todo_handler(mut request: Request) -> Response {
-    let todos_ctx: Arc<RwLock<Todos>> = request.extensions_mut().remove().unwrap();
+async fn remove_todo_handler(request: Request, ctx: &Ctx) -> Response {
     let payload = extract_payload(request).await;
-
-    todos_ctx
-        .write()
-        .unwrap()
-        .remove(Uuid::parse_str(&payload).unwrap());
+    let id = Uuid::parse_str(&payload).unwrap();
+    ctx.todos.write().unwrap().remove(id);
 
     redirect_home().await
 }
 
-async fn toggle_todo_handler(mut request: Request) -> Response {
-    let todos_ctx: Arc<RwLock<Todos>> = request.extensions_mut().remove().unwrap();
+async fn toggle_todo_handler(request: Request, ctx: &Ctx) -> Response {
     let payload = extract_payload(request).await;
-
-    todos_ctx
-        .write()
-        .unwrap()
-        .toggle(Uuid::parse_str(&payload).unwrap());
+    let id = Uuid::parse_str(&payload).unwrap();
+    ctx.todos.write().unwrap().toggle(id);
 
     redirect_home().await
 }
 
-async fn handle(request: Request) -> Response {
+async fn handle(request: Request, ctx: &Ctx) -> Response {
     // pattern match for both the method and the path of the request
     match (request.method(), request.uri().path()) {
         // GET handlers
         // Index page handler
-        (&hyper::Method::GET, "/") | (&hyper::Method::GET, "/index.html") => index(request).await,
+        (&hyper::Method::GET, "/") | (&hyper::Method::GET, "/index.html") => {
+            index(request, ctx).await
+        }
         // Style handler
         (&hyper::Method::GET, "/static/todo.css") => stylesheet().await,
         // Image handler
         (&hyper::Method::GET, path_str) => image(path_str).await,
         // POST handlers
-        (&hyper::Method::POST, "/done") => toggle_todo_handler(request).await,
-        (&hyper::Method::POST, "/not-done") => toggle_todo_handler(request).await,
-        (&hyper::Method::POST, "/delete") => remove_todo_handler(request).await,
-        (&hyper::Method::POST, "/") => add_todo_handler(request).await,
+        (&hyper::Method::POST, "/done") => toggle_todo_handler(request, ctx).await,
+        (&hyper::Method::POST, "/not-done") => toggle_todo_handler(request, ctx).await,
+        (&hyper::Method::POST, "/delete") => remove_todo_handler(request, ctx).await,
+        (&hyper::Method::POST, "/") => add_todo_handler(request, ctx).await,
         // Anything else handler
         _ => four_oh_four().await,
     }
 }
-
-pub async fn serve<C, H, F>(
-    addr: std::net::SocketAddr,
-    context: Arc<C>,
-    handler: H,
-) -> hyper::Result<()>
-where
-    C: 'static + Send + Sync,
-    H: 'static + Fn(Request) -> F + Send + Sync,
-    F: Future<Output = Response> + Send,
-{
-    // Create a task local that will store the panic message and backtrace if a panic occurs.
-    tokio::task_local! {
-        static PANIC_MESSAGE_AND_BACKTRACE: RefCell<Option<(String, Backtrace)>>;
-    }
-    async fn service<C, H, F>(
-        handler: Arc<H>,
-        context: Arc<C>,
-        mut request: http::Request<hyper::Body>,
-    ) -> Result<http::Response<hyper::Body>, Infallible>
-    where
-        C: Send + Sync + 'static,
-        H: Fn(http::Request<hyper::Body>) -> F + Send + Sync + 'static,
-        F: Future<Output = http::Response<hyper::Body>> + Send,
-    {
-        let method = request.method().clone();
-        let path = request.uri().path_and_query().unwrap().path().to_owned();
-        tracing::info!(path = %path, method = %method, "request");
-        request.extensions_mut().insert(context);
-        let result = AssertUnwindSafe(handler(request)).catch_unwind().await;
-        let start = std::time::SystemTime::now();
-        let response = result.unwrap_or_else(|_| {
-            let body = PANIC_MESSAGE_AND_BACKTRACE.with(|panic_message_and_backtrace| {
-                let panic_message_and_backtrace = panic_message_and_backtrace.borrow();
-                let (message, backtrace) = panic_message_and_backtrace.as_ref().unwrap();
-                tracing::error!(
-                    method = %method,
-                    path = %path,
-                    backtrace = ?backtrace,
-                    "500"
-                );
-                format!("{}\n{:?}", message, backtrace)
-            });
-            http::Response::builder()
-                .status(http::StatusCode::INTERNAL_SERVER_ERROR)
-                .body(hyper::Body::from(body))
-                .unwrap()
-        });
-        tracing::info!(
-            "Response generated in {}μs",
-            start.elapsed().unwrap_or_default().as_micros()
-        );
-        Ok(response)
-    }
+// Create a task local that will store the panic message and backtrace if a panic occurs.
+tokio::task_local! {
+    static PANIC_MESSAGE_AND_BACKTRACE: RefCell<Option<(String, Backtrace)>>;
+}
+async fn serve(addr: std::net::SocketAddr, context: &'static Ctx) -> hyper::Result<()> {
     // Install a panic hook that will record the panic message and backtrace if a panic occurs.
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|panic_info| {
@@ -305,26 +242,75 @@ where
             panic_message_and_backtrace.borrow_mut().replace(value);
         })
     }));
-    // Wrap the request handler and context with Arc to allow sharing a reference to it with each task.
-    let handler = Arc::new(handler);
-    let service = hyper::service::make_service_fn(|_| {
-        let handler = handler.clone();
-        let context = context.clone();
-        async move {
-            Ok::<_, Infallible>(hyper::service::service_fn(move |request| {
-                let handler = handler.clone();
-                let context = context.clone();
-                PANIC_MESSAGE_AND_BACKTRACE.scope(RefCell::new(None), async move {
-                    service(handler, context, request).await
-                })
-            }))
-        }
-    });
     let server = hyper::server::Server::try_bind(&addr)?;
     tracing::info!("🚀 serving at {}", addr);
-    server.serve(service).await?;
+    server.serve(Bogus(context)).await?;
     std::panic::set_hook(hook);
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Bogus<'a>(&'a Ctx);
+
+impl<'a, 't> hyper::service::Service<&'t hyper::server::conn::AddrStream> for Bogus<'a> {
+    type Error = Infallible;
+    type Response = Self;
+    type Future = futures::future::Ready<Result<Self, Self::Error>>;
+
+    fn poll_ready(
+        &mut self,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, _: &'t hyper::server::conn::AddrStream) -> Self::Future {
+        futures::future::ready(Ok(*self))
+    }
+}
+impl<'a> hyper::service::Service<Request> for Bogus<'a> {
+    type Response = Response;
+    type Error = Infallible;
+    type Future = impl Future<Output = Result<Self::Response, Self::Error>>;
+
+    fn poll_ready(
+        &mut self,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, req: Request) -> Self::Future {
+        PANIC_MESSAGE_AND_BACKTRACE.scope(RefCell::new(None), async {
+            let method = req.method().clone();
+            let path = req.uri().path_and_query().unwrap().path().to_owned();
+            tracing::info!(path = %path, method = %method, "request");
+            let result = AssertUnwindSafe(handle(req, self.0)).catch_unwind().await;
+            let start = std::time::SystemTime::now();
+            let response = result.unwrap_or_else(|_| {
+                let body = PANIC_MESSAGE_AND_BACKTRACE.with(|panic_message_and_backtrace| {
+                    let panic_message_and_backtrace = panic_message_and_backtrace.borrow();
+                    let (message, backtrace) = panic_message_and_backtrace.as_ref().unwrap();
+                    tracing::error!(
+                        method = %method,
+                        path = %path,
+                        backtrace = ?backtrace,
+                        "500"
+                    );
+                    format!("{}\n{:?}", message, backtrace)
+                });
+                http::Response::builder()
+                    .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(hyper::Body::from(body))
+                    .unwrap()
+            });
+            tracing::info!(
+                "Response generated in {}μs",
+                start.elapsed().unwrap_or_default().as_micros()
+            );
+            Ok(response)
+        })
+    }
 }
 
 // Entrypoint
@@ -335,10 +321,9 @@ async fn app(args: Args) -> Result<()> {
     // .parse() parses to a std::net::SocketAddr
     let addr = std::net::SocketAddr::new(args.address.parse()?, args.port);
 
-    let todos = Todos::new();
-    let context = Arc::new(RwLock::new(todos));
+    let ctx = Box::leak(Default::default());
 
-    serve(addr, context, handle).await?;
+    serve(addr, ctx).await?;
 
     Ok(())
 }
@@ -372,14 +357,13 @@ mod test {
     use select::{document::Document, predicate::Name};
     #[tokio::test]
     async fn test_four_oh_four() {
-        let mut request = hyper::Request::builder()
+        let request = hyper::Request::builder()
             .method(http::Method::GET)
             .uri("/nonsense")
             .body(hyper::Body::empty())
             .unwrap();
-        let context = Arc::new(RwLock::new(Todos::new()));
-        request.extensions_mut().insert(context);
-        let response = handle(request).await;
+        let ctx = Default::default();
+        let response = handle(request, &ctx).await;
 
         assert_eq!(response.status(), http::status::StatusCode::NOT_FOUND);
 
